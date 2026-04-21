@@ -24,7 +24,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.mysql",
         "NAME": "distributed_cache",
         "USER": "root",
-        "PASSWORD": "12345",          # change to your MySQL password
+        "PASSWORD": "123",          # change to your MySQL password
         "HOST": "127.0.0.1",
         "PORT": "3306",
     }
