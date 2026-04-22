@@ -1,9 +1,6 @@
 """
 Week 2 Tests — TCP Server + Store + Auth
 Run with: pytest tests/test_server.py -v
-
-Uses dynamic port allocation (port=0) so the OS assigns a free port
-for every single test — completely avoids Windows TIME_WAIT conflicts.
 """
 import threading
 import socket
@@ -21,23 +18,19 @@ except Exception:
 
 
 def get_free_port() -> int:
-    """Ask the OS for a free port — guaranteed unique every call."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
 
 def make_server(port: int):
     from server.tcp_server import TCPServer
     return TCPServer(host="127.0.0.1", port=port)
 
-
-def start_server(srv) -> threading.Thread:
+def start_server(srv):
     t = threading.Thread(target=srv.start, daemon=True)
     t.start()
     time.sleep(0.3)
     return t
-
 
 def connect_client(port: int) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -46,31 +39,19 @@ def connect_client(port: int) -> socket.socket:
     sock.recv(4096)
     return sock
 
-
 def sr(sock: socket.socket, msg: str) -> str:
     sock.sendall((msg + "\n").encode())
     return sock.recv(4096).decode().strip()
 
-
-def test_signup_new_user(self, srv):
-    _, port = srv
+def signup_and_auth(port: int, username: str, password: str) -> socket.socket:
     sock = connect_client(port)
-    resp = sr(sock, "SIGNUP")
-    assert "username" in resp.lower() or "choose" in resp.lower()
-    sr(sock, "newuser")
-    resp = sr(sock, "password123")
-    assert "ready" in resp.lower()
-    sock.close()
+    sr(sock, "SIGNUP")
+    sr(sock, username)
+    sr(sock, password)
+    return sock
 
-
-MOCK_MAKE = patch(
-    "django.contrib.auth.hashers.make_password",
-    side_effect=lambda p: f"hashed_{p}"
-)
-MOCK_CHECK = patch(
-    "django.contrib.auth.hashers.check_password",
-    side_effect=lambda plain, hashed: hashed == f"hashed_{plain}"
-)
+MOCK_MAKE = patch("django.contrib.auth.hashers.make_password", side_effect=lambda p: f"hashed_{p}")
+MOCK_CHECK = patch("django.contrib.auth.hashers.check_password", side_effect=lambda plain, hashed: hashed == f"hashed_{plain}")
 
 
 class TestStore:
@@ -127,7 +108,7 @@ class TestTCPServerAuth:
         assert "username" in resp.lower() or "choose" in resp.lower()
         sr(sock, "newuser")
         resp = sr(sock, "password123")
-        assert "created" in resp.lower() or "authenticated" in resp.lower()
+        assert "ready" in resp.lower()
         sock.close()
 
     def test_login_after_signup(self, srv):
@@ -138,7 +119,7 @@ class TestTCPServerAuth:
         s2 = connect_client(port)
         sr(s2, "LOGIN"); sr(s2, "logintest")
         resp = sr(s2, "mypassword")
-        assert "authenticated" in resp.lower() or "ready" in resp.lower()
+        assert "ready" in resp.lower()
         s2.close()
 
     def test_login_wrong_password(self, srv):
