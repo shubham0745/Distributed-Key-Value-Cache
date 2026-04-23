@@ -123,7 +123,7 @@ class TCPServer:
                 # Auth failed or client disconnected
                 return
 
-            self._send(client_socket, f"Authenticated as '{current_user}'. Ready.")
+            self._send(client_socket, f"READY:{current_user}")
             logger.info(f"{address} authenticated as '{current_user}'")
 
             # Phase 2: Commands
@@ -230,7 +230,7 @@ class TCPServer:
 
         # Create the user
         self._create_user(username, password)
-        self._send(sock, f"Account created for '{username}'")
+        # self._send(sock, f"Account created for '{username}'")
         return username
 
     # ──────────────────────────────────────────────
@@ -363,14 +363,13 @@ class TCPServer:
             pass
 
     def _recv(self, sock: socket.socket, buffer_size: int = 4096) -> Optional[str]:
-        """
-        Receive one line from the client.
-        Returns None if the client disconnected.
-        """
         try:
-            data = sock.recv(buffer_size)
-            if not data:
-                return None  # Client disconnected cleanly
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = sock.recv(1)
+                if not chunk:
+                    return None
+                data += chunk
             return data.decode("utf-8").strip()
         except (ConnectionResetError, OSError):
             return None
