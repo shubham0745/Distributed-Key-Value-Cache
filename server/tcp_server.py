@@ -372,7 +372,7 @@ class TCPServer:
                 data += chunk
             return data.decode("utf-8").strip()
         except (ConnectionResetError, OSError):
-            return None
+            return None 
 
     def __repr__(self) -> str:
         return f"TCPServer({self.host}:{self.port}, users={len(self._stores)})"
