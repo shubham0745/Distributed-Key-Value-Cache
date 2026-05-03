@@ -41,6 +41,7 @@ def get_user(username: str) -> Optional["CacheUser"]:
     Returns None if not found.
     """
     from apps.users.models import CacheUser
+    
     try:
         return CacheUser.objects.get(username=username)
     except CacheUser.DoesNotExist:
