@@ -3,15 +3,19 @@ raft/rpc.py
 
 RPC (Remote Procedure Call) message definitions for Raft.
 
-Two RPCs exist in Raft:
-  1. RequestVote    — sent by CANDIDATE to gather votes
-  2. AppendEntries  — sent by LEADER for heartbeats AND log replication
+Three RPCs exist in Raft:
+  1. RequestVote     — sent by CANDIDATE to gather votes
+  2. AppendEntries   — sent by LEADER for heartbeats AND log replication
+  3. InstallSnapshot — sent by LEADER to a follower so far behind that the
+                       entries it needs were already compacted away
 
 We serialize these as JSON strings over TCP sockets between nodes.
 """
 import json
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Any
+
+from raft.types import LogEntry
 
 
 @dataclass
@@ -69,7 +73,7 @@ class AppendEntriesRequest:
     leader_id:      str
     prev_log_index: int
     prev_log_term:  int
-    entries:        list   # list of serialized LogEntry dicts
+    entries:        list   # list of LogEntry (dicts on the wire)
     leader_commit:  int
 
 
@@ -79,11 +83,44 @@ class AppendEntriesResponse:
     Response to an AppendEntries RPC.
 
     Fields:
-        term    — follower's current term (leader steps down if higher)
-        success — True if follower accepted the entries
+        term           — follower's current term (leader steps down if higher)
+        success        — True if follower accepted the entries
+        match_index    — on success: the follower's log now matches the
+                         leader's up to this index
+        conflict_index — on failure: where the leader should retry from.
+                         Lets the leader skip back a whole term at once
+                         instead of one entry per round trip.
     """
     term:    int
     success: bool
+    match_index:    int = 0
+    conflict_index: int = 0
+
+
+@dataclass
+class InstallSnapshotRequest:
+    """
+    Sent by LEADER when a follower needs entries the leader has already
+    compacted. Carries the whole state machine instead of the log.
+
+    Fields:
+        term                — leader's current term
+        leader_id           — so followers can redirect clients
+        last_included_index — the snapshot replaces entries 1..this index
+        last_included_term  — term of that entry
+        data                — state machine dump (users + their keys)
+    """
+    term:                int
+    leader_id:           str
+    last_included_index: int
+    last_included_term:  int
+    data:                Any
+
+
+@dataclass
+class InstallSnapshotResponse:
+    """Response to InstallSnapshot: just the follower's term."""
+    term: int
 
 
 # ── Serialization helpers ─────────────────────────────────────────────
@@ -105,9 +142,20 @@ def decode_request_vote_resp(data: str) -> RequestVoteResponse:
 
 def decode_append_entries_req(data: str) -> AppendEntriesRequest:
     d = json.loads(data)
+    d["entries"] = [LogEntry(**e) for e in d["entries"]]
     return AppendEntriesRequest(**d)
 
 
 def decode_append_entries_resp(data: str) -> AppendEntriesResponse:
     d = json.loads(data)
     return AppendEntriesResponse(**d)
+
+
+def decode_install_snapshot_req(data: str) -> InstallSnapshotRequest:
+    d = json.loads(data)
+    return InstallSnapshotRequest(**d)
+
+
+def decode_install_snapshot_resp(data: str) -> InstallSnapshotResponse:
+    d = json.loads(data)
+    return InstallSnapshotResponse(**d)

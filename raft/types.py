@@ -7,6 +7,13 @@ Every concept here maps directly to the Raft paper.
 import time
 from enum import Enum
 from dataclasses import dataclass, field
+from typing import Optional
+
+
+# A new leader appends one of these as soon as it wins. It changes no data,
+# but committing it also commits every entry left over from older terms
+# (a leader may only count replicas for entries of its OWN term — §5.4.2).
+NOOP = "NOOP"
 
 
 class RaftState(Enum):
@@ -49,7 +56,7 @@ class LogEntry:
     """
     term:     int
     index:    int
-    command:  str   # "SET key value" or "DELETE key"
+    command:  str   # "SIGNUP <hash>", "SET key value", "DELETE key" or NOOP
     username: str   # which user's cache to apply to
 
 
@@ -58,14 +65,21 @@ class RaftNode:
     """
     Complete state of one Raft node.
 
-    Persistent state (must survive crashes — Week 6 saves to MySQL):
+    Persistent state (must survive crashes — saved through a RaftStorage):
         current_term  — latest term this node has seen
         voted_for     — candidate_id we voted for in current term
-        log           — list of LogEntry
+        log           — list of LogEntry (only entries AFTER the snapshot)
+
+    Snapshot (log compaction):
+        snapshot_index — last log index folded into the snapshot
+        snapshot_term  — term of that entry
+        Entries 1..snapshot_index are no longer in `log`; their effect
+        already lives in the state machine (the cache / MySQL).
 
     Volatile state (rebuilt from log on restart):
         commit_index  — highest log index known to be committed
         last_applied  — highest log index applied to state machine
+        leader_id     — who we believe the leader is (for client redirects)
 
     Leader-only volatile state (reset after each election):
         next_index    — for each follower, next log index to send
@@ -92,15 +106,62 @@ class RaftNode:
     # Timing
     last_heartbeat: float = field(default_factory=time.time)
 
+    # Who the leader is (None while unknown / during an election)
+    leader_id: Optional[str] = None
+
+    # Snapshot boundary
+    snapshot_index: int = 0
+    snapshot_term:  int = 0
+
     def last_log_index(self) -> int:
         """Index of the last entry in our log (0 if empty)."""
-        return len(self.log)
+        return self.snapshot_index + len(self.log)
 
     def last_log_term(self) -> int:
         """Term of the last log entry (0 if log is empty)."""
         if self.log:
             return self.log[-1].term
-        return 0
+        return self.snapshot_term
+
+    def term_at(self, index: int) -> Optional[int]:
+        """
+        Term of the entry at `index`.
+        Returns None when we don't have it: it is past the end of our
+        log, or already compacted away inside the snapshot.
+        """
+        if index == self.snapshot_index:
+            return self.snapshot_term           # 0 when there is no snapshot
+        if index < self.snapshot_index or index > self.last_log_index():
+            return None
+        return self.log[index - self.snapshot_index - 1].term
+
+    def entry_at(self, index: int) -> Optional[LogEntry]:
+        if index <= self.snapshot_index or index > self.last_log_index():
+            return None
+        return self.log[index - self.snapshot_index - 1]
+
+    def entries_from(self, index: int, limit: int) -> list:
+        """Up to `limit` entries starting at `index` (must be > snapshot_index)."""
+        start = index - self.snapshot_index - 1
+        return self.log[start:start + limit]
+
+    def truncate_from(self, index: int) -> None:
+        """Delete the entry at `index` and everything after it."""
+        del self.log[index - self.snapshot_index - 1:]
+
+    def compact_through(self, index: int, term: int) -> None:
+        """
+        Fold entries 1..index into the snapshot.
+        If our entry at `index` has the same term we keep the entries
+        after it; otherwise our log disagrees with the snapshot and is
+        thrown away entirely.
+        """
+        if self.term_at(index) == term:
+            self.log = self.log[index - self.snapshot_index:]
+        else:
+            self.log = []
+        self.snapshot_index = index
+        self.snapshot_term  = term
 
     def is_leader(self) -> bool:
         return self.state == RaftState.LEADER
