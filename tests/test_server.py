@@ -24,7 +24,8 @@ def get_free_port() -> int:
 
 def make_server(port: int):
     from server.tcp_server import TCPServer
-    return TCPServer(host="127.0.0.1", port=port)
+    # use_db=False: these tests are about the protocol, not MySQL
+    return TCPServer(host="127.0.0.1", port=port, use_db=False)
 
 def start_server(srv):
     t = threading.Thread(target=srv.start, daemon=True)
