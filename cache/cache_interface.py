@@ -5,8 +5,7 @@ from typing import Optional
 class ICache(ABC):
     """
     Abstract base class defining the contract for all cache implementations.
-    Every cache (basic, LRU, TTL, etc.) MUST implement these methods.
-    This mirrors cache_interface.go from the original project.
+    Every cache (basic, LRU) MUST implement these methods.
     """
 
     @abstractmethod

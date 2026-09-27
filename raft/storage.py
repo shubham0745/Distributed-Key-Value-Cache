@@ -1,5 +1,5 @@
 """
-raft/storage.py  (Week 6 — Raft persistence)
+raft/storage.py — Raft persistence
 
 WHY PERSIST RAFT STATE?
 Raft's safety proof assumes a node never forgets three things:
@@ -8,7 +8,7 @@ Raft's safety proof assumes a node never forgets three things:
   log          — or a committed entry could silently disappear
 So the engine writes them through a RaftStorage BEFORE it answers any
 RPC that depends on them. The snapshot boundary is stored too, with the
-cluster membership in effect at that point (Week 7).
+cluster membership in effect at that point.
 
 Two implementations:
   MemoryRaftStorage          — RAM only. Used by a single node (its data is

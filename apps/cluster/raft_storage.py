@@ -1,5 +1,5 @@
 """
-apps/cluster/raft_storage.py  (Week 6)
+apps/cluster/raft_storage.py
 
 RaftStorage backed by the RaftMeta / RaftLogEntry tables.
 

@@ -10,7 +10,7 @@ The core Raft RPCs:
   3. InstallSnapshot — sent by LEADER, in chunks, to a follower so far
                        behind that the entries it needs were compacted
 
-Extensions (Week 7):
+Extensions:
   4. ReadIndex       — follower asks the leader "what must I have applied
                        before I can answer a read linearizably?"
   5. Forward         — follower hands a client's write to the leader

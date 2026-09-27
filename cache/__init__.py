@@ -10,8 +10,8 @@ class CacheFactory:
     WHY A FACTORY?
     The rest of the system (store, server) should NOT need to know
     which cache implementation they're getting. They just ask for
-    "a cache" and the factory decides. This is the same pattern as
-    Go's interface — code to the interface, not the implementation.
+    "a cache" and the factory decides: code to the interface, not the
+    implementation.
     
     Usage:
         cache = CacheFactory.create("lru", capacity=500)

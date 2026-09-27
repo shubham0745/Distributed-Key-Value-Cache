@@ -1,5 +1,5 @@
 """
-tests/test_raft_storage.py — Week 6: Raft persistence
+tests/test_raft_storage.py — Raft persistence
 
 The same contract is checked against both storages:
   MemoryRaftStorage — RAM (single node, tests)

@@ -16,7 +16,7 @@ from typing import Optional
 # (a leader may only count replicas for entries of its OWN term — §5.4.2).
 NOOP = "NOOP"
 
-# "CONFIG <json list of members>" — a new cluster membership (Week 7).
+# "CONFIG <json list of members>" — a new cluster membership.
 # Takes effect as soon as it is in a node's log, committed or not.
 CONFIG = "CONFIG"
 

@@ -1,5 +1,5 @@
 """
-tests/test_raft_week7.py — the Raft extensions
+tests/test_raft_extensions.py — the Raft extensions
 
   - Pre-Vote + leader stickiness: an isolated node can't inflate its term
     and disrupt the cluster when it comes back

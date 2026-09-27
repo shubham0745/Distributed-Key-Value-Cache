@@ -1,5 +1,5 @@
 """
-server/state_machine.py  (Week 5, extended in Week 7)
+server/state_machine.py
 
 The "state machine" in Raft terms: the data every node must agree on —
 which users exist (with password hashes), each user's key/values and

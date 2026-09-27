@@ -7,7 +7,6 @@ from cache.cache_interface import ICache
 class Cache(ICache):
     """
     Thread-safe in-memory key-value cache using a plain dict.
-    This directly mirrors cache_impl.go from the original project.
 
     Why a lock at all?
     Every client connection runs in its own thread, so two threads could
@@ -15,19 +14,18 @@ class Cache(ICache):
     thread inside at a time — readers included. "Reentrant" means the
     same thread may acquire it again without deadlocking itself.
 
-    The original Go code used sync.RWMutex, which also lets many READERS
-    in at once. Python's standard library has no read-write lock; with the
-    GIL a plain lock costs very little here, so we keep it simple.
+    A read-write lock would let many READERS in at once, but Python's
+    standard library has none, and with the GIL a plain lock costs very
+    little here.
     """
 
     def __init__(self):
         self._data: dict[str, str] = {}
-        self._lock = threading.RLock()  # Reentrant read-write lock
+        self._lock = threading.RLock()  # one thread at a time, reentrant
 
     def set(self, key: str, value: str) -> None:
         """
         Store key-value. Thread-safe write operation.
-        Go equivalent: c.Lock() / defer c.Unlock()
         """
         if not isinstance(key, str) or not isinstance(value, str):
             raise TypeError(f"Key and value must be strings, got {type(key)}, {type(value)}")
@@ -40,7 +38,7 @@ class Cache(ICache):
     def get(self, key: str) -> Optional[str]:
         """
         Retrieve value by key. Thread-safe read operation.
-        Returns None if key doesn't exist (Go version returned (val, bool)).
+        Returns None if key doesn't exist.
         """
         with self._lock:
             return self._data.get(key, None)
@@ -48,7 +46,6 @@ class Cache(ICache):
     def has(self, key: str) -> bool:
         """
         Check if key exists without retrieving its value.
-        Go equivalent: _, found := c.data[key]
         """
         with self._lock:
             return key in self._data
@@ -56,7 +53,6 @@ class Cache(ICache):
     def delete(self, key: str) -> bool:
         """
         Remove a key. Returns True if deleted, False if key didn't exist.
-        Go equivalent: delete(c.data, key)
         """
         with self._lock:
             if key in self._data:
@@ -65,7 +61,7 @@ class Cache(ICache):
             return False
 
     def clear(self) -> None:
-        """Remove all keys. Useful for testing and user logout."""
+        """Remove all keys."""
         with self._lock:
             self._data.clear()
 
@@ -80,7 +76,7 @@ class Cache(ICache):
             return list(self._data.items())
 
     def keys(self) -> list[str]:
-        """Return all keys. Useful for debugging."""
+        """Return all keys."""
         with self._lock:
             return list(self._data.keys())
 

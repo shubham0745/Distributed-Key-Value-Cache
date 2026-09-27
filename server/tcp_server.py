@@ -1,5 +1,5 @@
 """
-server/tcp_server.py  (Week 5 — writes replicated with Raft; Week 7 extras)
+server/tcp_server.py
 
 Client protocol: one command per line, one response per line.
 
@@ -225,11 +225,6 @@ class TCPServer:
         if self.use_db:
             return LocalRaftStorage()
         return MemoryRaftStorage()
-
-    @property
-    def _stores(self):
-        """username → Store (kept for older tests and debugging)."""
-        return self.state_machine.stores
 
     # ──────────────────────────────────────────────
     # SERVER LIFECYCLE

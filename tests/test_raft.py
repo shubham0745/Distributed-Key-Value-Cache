@@ -1,13 +1,11 @@
 """
-tests/test_raft.py — Week 4: Leader Election
+tests/test_raft.py — the Raft core
 
-Tests verify:
-  1. A single node becomes leader (no competition)
-  2. In a 3-node cluster, exactly ONE leader is elected
-  3. Leader sends heartbeats that prevent new elections
-  4. When leader dies, a new leader is elected
-  5. Nodes reject stale terms
-  6. Vote is only granted once per term
+  - Leader election: one leader per term, heartbeats, failover,
+    stale terms rejected, one vote per term
+  - Log replication: consistency check, conflicts, commit rules
+  - Persistence: term, vote and log survive a restart
+  - Log compaction and snapshots
 """
 import time
 import threading
@@ -15,10 +13,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from raft.types import RaftState, RaftNode, LogEntry
-from raft.rpc import (
-    RequestVoteRequest, RequestVoteResponse,
-    AppendEntriesRequest, AppendEntriesResponse,
-)
+from raft.rpc import RequestVoteRequest, AppendEntriesRequest
 from raft.node import RaftEngine, ELECTION_TIMEOUT_MAX
 from tests.ports import get_free_port
 
@@ -307,7 +302,7 @@ class TestLeaderElection:
 
 
 # ══════════════════════════════════════════════
-# WEEK 5 — LOG REPLICATION
+# LOG REPLICATION
 # ══════════════════════════════════════════════
 
 import json
@@ -531,7 +526,7 @@ class TestElectionTimer:
 
 
 class TestRaftPersistence:
-    """Week 6: term, vote and log survive a restart."""
+    """Term, vote and log survive a restart."""
 
     def make(self, storage):
         return RaftEngine("n1", "127.0.0.1", get_free_port(), ["127.0.0.1:1"], storage=storage)

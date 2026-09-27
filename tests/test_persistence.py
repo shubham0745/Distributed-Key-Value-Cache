@@ -1,19 +1,21 @@
 """
-tests/test_persistence.py  — Week 3
+tests/test_persistence.py — MySQL persistence
 
 Tests verify:
   1. db_service functions call the right Django ORM methods
   2. TCPServer writes to DB on SET/DELETE
   3. TCPServer restores data from DB on startup (_load_from_db)
-  4. All Week 2 tests still pass (use_db=False skips MySQL)
+  4. The same code against a real database (TestRealDatabase)
+  5. RAM-only mode still works (use_db=False skips MySQL)
 
-MySQL is fully mocked — no real DB needed to run tests.
+Most tests mock the ORM; TestRealDatabase uses the throwaway SQLite
+database set up in conftest.py.
 """
 import threading
 import socket
 import time
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from tests.ports import get_free_port
 
@@ -27,7 +29,7 @@ except Exception:
 
 
 # ──────────────────────────────────────────────
-# TEST HELPERS (same pattern as Week 2)
+# TEST HELPERS
 # ──────────────────────────────────────────────
 
 
@@ -95,7 +97,7 @@ class TestDbService:
         with patch("apps.users.models.CacheUser.objects") as mock_obj:
             mock_obj.create.return_value = mock_user
             from apps.users.db_service import save_user
-            result = save_user("shubham", "hashed_pw")
+            save_user("shubham", "hashed_pw")
             mock_obj.create.assert_called_once_with(
                 username="shubham",
                 password_hash="hashed_pw"
@@ -256,8 +258,8 @@ class TestServerRestoresFromDB:
             from server.tcp_server import TCPServer
             srv = TCPServer(host="127.0.0.1", port=0, use_db=True)
             srv._load_from_db()
-            assert "alice" in srv._stores
-            assert "bob" in srv._stores
+            assert "alice" in srv.state_machine.stores
+            assert "bob" in srv.state_machine.stores
 
     def test_restores_cache_entries_on_startup(self):
         """Each user's cache entries should be loaded into their LRUCache."""
@@ -269,7 +271,7 @@ class TestServerRestoresFromDB:
             from server.tcp_server import TCPServer
             srv = TCPServer(host="127.0.0.1", port=0, use_db=True)
             srv._load_from_db()
-            store = srv._stores["alice"]
+            store = srv.state_machine.stores["alice"]
             assert store.cache.get("name") == "alice"
             assert store.cache.get("city") == "delhi"
 
@@ -280,7 +282,7 @@ class TestServerRestoresFromDB:
             from server.tcp_server import TCPServer
             srv = TCPServer(host="127.0.0.1", port=0, use_db=True)
             srv._load_from_db()
-            assert len(srv._stores) == 0
+            assert len(srv.state_machine.stores) == 0
 
 
 # ──────────────────────────────────────────────
@@ -399,11 +401,11 @@ class TestRealDatabase:
 
 
 # ──────────────────────────────────────────────
-# REGRESSION: ALL WEEK 2 TESTS STILL PASS
+# RAM-ONLY MODE (use_db=False)
 # ──────────────────────────────────────────────
 
-class TestWeek2Regression:
-    """All Week 2 behavior must still work with use_db=False."""
+class TestRamOnlyMode:
+    """Everything still works without a database (use_db=False)."""
 
     @pytest.fixture()
     def session(self):

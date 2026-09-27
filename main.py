@@ -1,11 +1,11 @@
 """
 Entry point for the Distributed Key-Value Cache Server.
 
-Single node (Weeks 1-3 behaviour):
+Single node:
     python main.py                      # MySQL-backed, port 8001
     python main.py --no-db              # RAM only, no MySQL needed
 
-Raft cluster from cluster.json (Weeks 4-7), one terminal per node:
+Raft cluster from cluster.json, one terminal per node:
     python main.py --node node1
     python main.py --node node2
     python main.py --node node3

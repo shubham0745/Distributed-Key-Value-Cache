@@ -42,7 +42,7 @@ class LRUCache(ICache):
         If cache is full, evict LRU before inserting.
         """
         if not isinstance(key, str) or not isinstance(value, str):
-            raise TypeError(f"Key and value must be strings")
+            raise TypeError("Key and value must be strings")
         if not key:
             raise ValueError("Key cannot be empty")
 

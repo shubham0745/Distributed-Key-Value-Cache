@@ -1,5 +1,5 @@
 """
-config/settings.py  (Week 6 — Raft state stored alongside the cache data)
+config/settings.py
 
 Django is used for two things only: the ORM (persistence) and password
 hashing. There are no views, URLs or templates.

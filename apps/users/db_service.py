@@ -30,7 +30,10 @@ Functions:
 import functools
 import json
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from apps.users.models import CacheUser
 
 logger = logging.getLogger(__name__)
 

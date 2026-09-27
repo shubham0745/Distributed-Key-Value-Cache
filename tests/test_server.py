@@ -1,5 +1,5 @@
 """
-Week 2 Tests — TCP Server + Store + Auth
+Tests for the TCP server, per-user stores and auth
 Run with: pytest tests/test_server.py -v
 """
 import threading

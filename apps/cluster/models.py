@@ -1,5 +1,5 @@
 """
-apps/cluster/models.py  (Week 6)
+apps/cluster/models.py
 
 Durable Raft state for one node — see raft/storage.py for WHY it must
 survive a crash.

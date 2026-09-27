@@ -13,7 +13,7 @@ nodes store it the entry is "committed". Every node then hands committed
 entries, strictly in order, to apply_fn. Same entries + same order =
 every node ends up with exactly the same cache.
 
-HOW LEADER ELECTION WORKS (Week 4):
+HOW LEADER ELECTION WORKS:
 1. All nodes start as FOLLOWERs
 2. Each follower has an election timeout (random 1.5s - 3s)
 3. If a follower doesn't hear a heartbeat before timeout:
@@ -32,7 +32,7 @@ If all nodes had the same timeout, they'd ALL start elections
 simultaneously and split votes forever. Random timeouts mean
 one node almost always starts the election first and wins.
 
-HOW LOG REPLICATION WORKS (Week 5):
+HOW LOG REPLICATION WORKS:
 1. A client write reaches the leader → propose() appends it to the log.
 2. One replicator thread per follower sends the entries that follower is
    missing, plus (prev_log_index, prev_log_term) of the entry just before.
@@ -43,7 +43,7 @@ HOW LOG REPLICATION WORKS (Week 5):
    advances commit_index; followers learn it from leader_commit.
 5. The applier thread feeds committed entries to apply_fn, in order.
 
-PERSISTENCE (Week 6):
+PERSISTENCE:
 current_term, voted_for and the log go through a RaftStorage (MySQL in a
 real cluster) BEFORE we answer an RPC that depends on them.
 
@@ -53,7 +53,7 @@ entries we drop them: their effect already lives in the state machine.
 A follower that needs dropped entries is sent the state machine instead,
 streamed in chunks through a temporary file (InstallSnapshot).
 
-PRE-VOTE + CHECK-QUORUM (Week 7, Raft thesis §9.6):
+PRE-VOTE + CHECK-QUORUM (Raft thesis §9.6):
 A node cut off from the others would keep starting elections, raising its
 term every time; when it reconnected, that huge term would force a
 perfectly healthy leader to step down. So before a real election a node

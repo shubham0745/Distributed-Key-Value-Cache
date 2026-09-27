@@ -233,7 +233,7 @@ The tests never touch your MySQL. [`tests/conftest.py`](tests/conftest.py) point
 | `test_persistence.py` | write-through, restart, eviction fallback, startup checks |
 | `test_state_machine.py` | deterministic expiry, exactly-once sessions, snapshots (RAM and database) |
 | `test_raft.py` | election, replication, conflicts, crash and restart, snapshots |
-| `test_raft_week7.py` | Pre-Vote, CheckQuorum, partitions, ReadIndex, forwarding, membership, leadership transfer, chunked snapshots |
+| `test_raft_extensions.py` | Pre-Vote, CheckQuorum, partitions, ReadIndex, forwarding, membership, leadership transfer, chunked snapshots |
 | `test_raft_storage.py` | persisted Raft state (RAM and database) |
 | `test_cluster.py` | real TCP clusters: any-node access, failover, hand-over, expiry, admin, CLI |
 | `test_tls.py` | TLS, mutual TLS, certificate generation |

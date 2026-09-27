@@ -1,5 +1,5 @@
 """
-client/cli.py — command-line client for the distributed cache (Week 5, extended in Week 7)
+client/cli.py — command-line client for the distributed cache
 
     python client/cli.py                                   # interactive
     python client/cli.py --nodes 127.0.0.1:8001,127.0.0.1:8002

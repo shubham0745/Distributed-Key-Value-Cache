@@ -8,22 +8,20 @@ class Store:
     """
     Per-user store. Every user who logs in gets their OWN isolated Store.
 
-    This mirrors store_impl.go from the original project.
-
     WHY PER-USER ISOLATION?
     Without this, user A could do GET on user B's keys.
     With namespacing: shubham's "name" key and rahul's "name" key
     are completely separate — they never collide.
 
     Structure:
-        server.stores = {
+        state_machine.stores = {
             "shubham": Store(username="shubham", cache=LRUCache),
             "rahul":   Store(username="rahul",   cache=LRUCache),
         }
 
     The password is stored HERE (hashed) so the server can verify
     login attempts without hitting MySQL every single time.
-    MySQL (Week 3) is the persistent copy behind this RAM cache.
+    MySQL is the persistent copy behind this RAM cache.
     """
 
     def __init__(self, username: str, password_hash: str, capacity: int = 1000):

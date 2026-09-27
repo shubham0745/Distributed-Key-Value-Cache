@@ -1,9 +1,8 @@
 """
-Full test suite for Week 1: Cache Engine
+Tests for the cache engine: basic cache, LRU eviction, factory, thread safety
 Run with: pytest tests/test_cache.py -v
 """
 import threading
-import time
 import pytest
 
 from cache.cache_impl import Cache
