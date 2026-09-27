@@ -272,6 +272,12 @@ class TCPServer:
         self.raft.stop()
         if self._server_socket:
             try:
+                # On Linux close() alone doesn't wake the thread blocked in
+                # accept(), so the port stays taken until it times out.
+                self._server_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass            # Windows refuses shutdown on a listening socket
+            try:
                 self._server_socket.close()
             except Exception:
                 pass
