@@ -41,12 +41,13 @@ import pytest  # noqa: E402
 @pytest.fixture
 def clean_db():
     """Empty every table before and after the test."""
-    from apps.users.models import CacheUser, CacheEntry
+    from apps.users.models import CacheUser, CacheEntry, ClientSession
     from apps.cluster.models import RaftMeta, RaftLogEntry
 
     def wipe():
         CacheEntry.objects.all().delete()
         CacheUser.objects.all().delete()
+        ClientSession.objects.all().delete()
         RaftLogEntry.objects.all().delete()
         RaftMeta.objects.all().delete()
 

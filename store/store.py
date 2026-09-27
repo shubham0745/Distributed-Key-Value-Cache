@@ -30,6 +30,9 @@ class Store:
         self.username = username
         self._password_hash = password_hash  # Never stored as plain text
         self.cache: ICache = CacheFactory.create("lru", capacity=capacity)
+        # key → expiry time (Unix ms) for keys that have one. Kept beside
+        # the cache so the LRU classes stay simple; guarded by `lock`.
+        self.expiry: dict[str, int] = {}
         # Serialises "RAM miss → read MySQL → put it back in RAM" against
         # Raft applying a write to the same user at the same moment.
         # Without it a slow reader could put an OLD value back into RAM.

@@ -143,7 +143,7 @@ class TestDbService:
             mock_ce.update_or_create.assert_called_once_with(
                 user=mock_user,
                 cache_key="city",
-                defaults={"cache_value": "gurugram"}
+                defaults={"cache_value": "gurugram", "expire_at": None}  # SET clears expiry
             )
 
     def test_delete_entry_returns_true_when_deleted(self):
@@ -374,19 +374,24 @@ class TestRealDatabase:
                 srv.start()
 
     def test_snapshot_round_trip(self):
+        import io
         from raft import LogEntry
         from server.state_machine import CacheStateMachine
         sm = CacheStateMachine(use_db=True)
         sm.apply(LogEntry(1, 1, "SIGNUP hashed_x", "zoe"))
-        sm.apply(LogEntry(1, 2, "SET lang python", "zoe"))
-        snapshot = sm.snapshot()
+        sm.apply(LogEntry(1, 2, "SET lang python", "zoe", request_id="c1:1"))
+        sm.apply(LogEntry(1, 3, "SETEX tmp 99999999999999 soon", "zoe"))
+        snapshot = io.StringIO()
+        sm.snapshot(snapshot)
 
-        from apps.users.db_service import replace_all
-        replace_all([])                              # wipe
+        from apps.users.db_service import replace_from
+        replace_from([])                             # wipe
         fresh = CacheStateMachine(use_db=True)
-        fresh.restore(snapshot)
+        fresh.restore(io.StringIO(snapshot.getvalue()))
         assert fresh.get("zoe", "lang") == "python"
         assert fresh.user_exists("zoe")
+        assert fresh.ttl("zoe", "tmp") > 0
+        assert fresh.session_result("c1:1") is True
 
     def test_cluster_node_keeps_raft_state_in_db(self):
         from server.tcp_server import TCPServer

@@ -45,6 +45,7 @@ class CacheEntry(models.Model):
         cache_key   — the key string (e.g. "name", "city")
         cache_value — the value string (e.g. "shubham", "gurugram")
         updated_at  — last time this entry was SET
+        expire_at   — when the key expires (Unix time in ms), NULL = never
 
     The combination of (user, cache_key) is unique —
     one user can't have two entries with the same key.
@@ -54,6 +55,7 @@ class CacheEntry(models.Model):
     cache_key   = models.CharField(max_length=512)
     cache_value = models.TextField()
     updated_at  = models.DateTimeField(auto_now=True)
+    expire_at   = models.BigIntegerField(null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = "cache_entries"
@@ -61,3 +63,25 @@ class CacheEntry(models.Model):
 
     def __str__(self):
         return f"{self.user.username}:{self.cache_key}"
+
+
+class ClientSession(models.Model):
+    """
+    The last request each client made, so a retry is applied only once.
+
+    A client tags every request "client_id:seq". If a reply gets lost and
+    the client retries, the log ends up with the request twice — but the
+    second copy finds (client_id, seq) here and just returns the stored
+    result instead of running again. Every node keeps the same table
+    because it is only ever changed by applying the Raft log.
+    """
+    client_id  = models.CharField(max_length=64, unique=True)
+    last_seq   = models.BigIntegerField()
+    result     = models.TextField()                   # JSON
+    last_index = models.BigIntegerField(db_index=True)  # log index, for evicting old sessions
+
+    class Meta:
+        db_table = "client_sessions"
+
+    def __str__(self):
+        return f"{self.client_id}#{self.last_seq}"
