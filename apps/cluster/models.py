@@ -14,12 +14,13 @@ from django.db import models
 
 
 class RaftMeta(models.Model):
-    node_id        = models.CharField(max_length=64, unique=True)
-    current_term   = models.BigIntegerField(default=0)
-    voted_for      = models.CharField(max_length=64, null=True, blank=True)
-    snapshot_index = models.BigIntegerField(default=0)
-    snapshot_term  = models.BigIntegerField(default=0)
-    last_applied   = models.BigIntegerField(default=0)
+    node_id         = models.CharField(max_length=64, unique=True)
+    current_term    = models.BigIntegerField(default=0)
+    voted_for       = models.CharField(max_length=64, null=True, blank=True)
+    snapshot_index  = models.BigIntegerField(default=0)
+    snapshot_term   = models.BigIntegerField(default=0)
+    last_applied    = models.BigIntegerField(default=0)
+    snapshot_config = models.TextField(null=True, blank=True)   # JSON members at snapshot_index
 
     class Meta:
         db_table = "raft_meta"
@@ -34,6 +35,7 @@ class RaftLogEntry(models.Model):
     term      = models.BigIntegerField()
     command   = models.TextField()
     username  = models.CharField(max_length=150, blank=True)
+    request_id = models.CharField(max_length=100, blank=True, default="")
 
     class Meta:
         db_table = "raft_log"

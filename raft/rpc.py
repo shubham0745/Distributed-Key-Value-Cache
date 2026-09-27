@@ -3,17 +3,25 @@ raft/rpc.py
 
 RPC (Remote Procedure Call) message definitions for Raft.
 
-Three RPCs exist in Raft:
-  1. RequestVote     — sent by CANDIDATE to gather votes
+The core Raft RPCs:
+  1. RequestVote     — sent by CANDIDATE to gather votes (also used for
+                       the Pre-Vote round, with pre_vote=True)
   2. AppendEntries   — sent by LEADER for heartbeats AND log replication
-  3. InstallSnapshot — sent by LEADER to a follower so far behind that the
-                       entries it needs were already compacted away
+  3. InstallSnapshot — sent by LEADER, in chunks, to a follower so far
+                       behind that the entries it needs were compacted
+
+Extensions (Week 7):
+  4. ReadIndex       — follower asks the leader "what must I have applied
+                       before I can answer a read linearizably?"
+  5. Forward         — follower hands a client's write to the leader
+  6. TimeoutNow      — leader asks a caught-up follower to take over now
+                       (leadership transfer on a graceful shutdown)
 
 We serialize these as JSON strings over TCP sockets between nodes.
 """
 import json
 from dataclasses import dataclass, asdict
-from typing import Any
+from typing import Any, Optional
 
 from raft.types import LogEntry
 
@@ -24,10 +32,15 @@ class RequestVoteRequest:
     Sent by a CANDIDATE to every other node asking for their vote.
 
     Fields:
-        term           — candidate's current term
+        term           — candidate's current term (for a pre-vote: the
+                         term it WOULD use, i.e. its term + 1)
         candidate_id   — who is asking for the vote
         last_log_index — index of candidate's last log entry
         last_log_term  — term of candidate's last log entry
+        pre_vote       — only asking "would you vote for me?"; nobody
+                         changes any state
+        transfer       — the old leader asked for this election, so
+                         followers must not ignore it (see TimeoutNow)
 
     A node grants its vote if:
       1. candidate's term >= our term
@@ -39,6 +52,8 @@ class RequestVoteRequest:
     candidate_id:   str
     last_log_index: int
     last_log_term:  int
+    pre_vote:       bool = False
+    transfer:       bool = False
 
 
 @dataclass
@@ -68,6 +83,8 @@ class AppendEntriesRequest:
         prev_log_term — term of prev_log_index entry
         entries       — list of new log entries (empty for heartbeat)
         leader_commit — leader's commit_index
+        leader_address— leader's Raft "host:port", so followers can
+                        forward writes and reads to it
     """
     term:           int
     leader_id:      str
@@ -75,6 +92,7 @@ class AppendEntriesRequest:
     prev_log_term:  int
     entries:        list   # list of LogEntry (dicts on the wire)
     leader_commit:  int
+    leader_address: str = ""
 
 
 @dataclass
@@ -101,25 +119,76 @@ class AppendEntriesResponse:
 class InstallSnapshotRequest:
     """
     Sent by LEADER when a follower needs entries the leader has already
-    compacted. Carries the whole state machine instead of the log.
+    compacted. Carries the state machine instead of the log, streamed in
+    chunks so it never has to fit in one message.
 
     Fields:
         term                — leader's current term
-        leader_id           — so followers can redirect clients
+        leader_id           — so followers know who leads
         last_included_index — the snapshot replaces entries 1..this index
         last_included_term  — term of that entry
-        data                — state machine dump (users + their keys)
+        offset              — where this chunk starts in the snapshot file
+        data                — the chunk, base64-encoded
+        done                — True on the last chunk
+        config              — cluster membership as of last_included_index
+        leader_address      — leader's Raft "host:port"
     """
     term:                int
     leader_id:           str
     last_included_index: int
     last_included_term:  int
-    data:                Any
+    offset:              int
+    data:                str
+    done:                bool
+    config:              Optional[list] = None
+    leader_address:      str = ""
 
 
 @dataclass
 class InstallSnapshotResponse:
-    """Response to InstallSnapshot: just the follower's term."""
+    """success=False: chunk out of order — the leader restarts from offset 0."""
+    term:    int
+    success: bool = True
+
+
+@dataclass
+class ReadIndexRequest:
+    term:    int
+    node_id: str
+
+
+@dataclass
+class ReadIndexResponse:
+    """success=True: once you have applied up to `index`, your reads are current."""
+    term:    int
+    success: bool
+    index:   int = 0
+
+
+@dataclass
+class ForwardRequest:
+    """A client write, forwarded from a follower to the leader."""
+    command:    str
+    username:   str
+    request_id: str
+    timeout:    float
+
+
+@dataclass
+class ForwardResponse:
+    ok:     bool
+    result: Any = None
+    error:  str = ""     # "not_leader" means "ask the new leader"
+
+
+@dataclass
+class TimeoutNowRequest:
+    term:      int
+    leader_id: str
+
+
+@dataclass
+class TimeoutNowResponse:
     term: int
 
 
@@ -152,10 +221,32 @@ def decode_append_entries_resp(data: str) -> AppendEntriesResponse:
 
 
 def decode_install_snapshot_req(data: str) -> InstallSnapshotRequest:
-    d = json.loads(data)
-    return InstallSnapshotRequest(**d)
+    return InstallSnapshotRequest(**json.loads(data))
 
 
 def decode_install_snapshot_resp(data: str) -> InstallSnapshotResponse:
-    d = json.loads(data)
-    return InstallSnapshotResponse(**d)
+    return InstallSnapshotResponse(**json.loads(data))
+
+
+def decode_read_index_req(data: str) -> ReadIndexRequest:
+    return ReadIndexRequest(**json.loads(data))
+
+
+def decode_read_index_resp(data: str) -> ReadIndexResponse:
+    return ReadIndexResponse(**json.loads(data))
+
+
+def decode_forward_req(data: str) -> ForwardRequest:
+    return ForwardRequest(**json.loads(data))
+
+
+def decode_forward_resp(data: str) -> ForwardResponse:
+    return ForwardResponse(**json.loads(data))
+
+
+def decode_timeout_now_req(data: str) -> TimeoutNowRequest:
+    return TimeoutNowRequest(**json.loads(data))
+
+
+def decode_timeout_now_resp(data: str) -> TimeoutNowResponse:
+    return TimeoutNowResponse(**json.loads(data))

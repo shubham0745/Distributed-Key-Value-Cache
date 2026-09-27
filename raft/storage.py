@@ -7,7 +7,8 @@ Raft's safety proof assumes a node never forgets three things:
   voted_for    — or it could vote TWICE in one term → two leaders
   log          — or a committed entry could silently disappear
 So the engine writes them through a RaftStorage BEFORE it answers any
-RPC that depends on them.
+RPC that depends on them. The snapshot boundary is stored too, with the
+cluster membership in effect at that point (Week 7).
 
 Two implementations:
   MemoryRaftStorage          — RAM only. Used by a single node (its data is
@@ -27,12 +28,13 @@ from raft.types import LogEntry
 @dataclass
 class PersistentState:
     """Everything a node reloads on startup."""
-    current_term:   int = 0
-    voted_for:      Optional[str] = None
-    log:            list = field(default_factory=list)   # entries AFTER the snapshot
-    snapshot_index: int = 0
-    snapshot_term:  int = 0
-    last_applied:   int = 0
+    current_term:    int = 0
+    voted_for:       Optional[str] = None
+    log:             list = field(default_factory=list)   # entries AFTER the snapshot
+    snapshot_index:  int = 0
+    snapshot_term:   int = 0
+    last_applied:    int = 0
+    snapshot_config: Optional[list] = None   # list[Member]; None = never saved
 
 
 class RaftStorage(ABC):
@@ -54,8 +56,12 @@ class RaftStorage(ABC):
         """Delete the entry at `index` and every entry after it."""
 
     @abstractmethod
-    def save_snapshot(self, index: int, term: int, last_applied: int) -> None:
-        """Record a snapshot boundary and drop the entries it covers (<= index)."""
+    def save_snapshot(self, index: int, term: int, last_applied: int,
+                      config: Optional[list] = None) -> None:
+        """
+        Record a snapshot boundary and drop the entries it covers (<= index).
+        `config` is the membership at `index`; None keeps the stored one.
+        """
 
     def close_thread_resources(self) -> None:
         """Called when an engine thread finishes (e.g. to close its DB connection)."""
@@ -77,6 +83,7 @@ class MemoryRaftStorage(RaftStorage):
         self._snapshot_index = 0
         self._snapshot_term = 0
         self._last_applied = 0
+        self._config: Optional[list] = None
 
     def load(self) -> PersistentState:
         with self._lock:
@@ -88,6 +95,7 @@ class MemoryRaftStorage(RaftStorage):
                 snapshot_index=self._snapshot_index,
                 snapshot_term=self._snapshot_term,
                 last_applied=self._last_applied,
+                snapshot_config=None if self._config is None else list(self._config),
             )
 
     def save_term_and_vote(self, term: int, voted_for: Optional[str]) -> None:
@@ -107,11 +115,14 @@ class MemoryRaftStorage(RaftStorage):
         with self._lock:
             self._drop_from(index)
 
-    def save_snapshot(self, index: int, term: int, last_applied: int) -> None:
+    def save_snapshot(self, index: int, term: int, last_applied: int,
+                      config: Optional[list] = None) -> None:
         with self._lock:
             self._snapshot_index = index
             self._snapshot_term = term
             self._last_applied = last_applied
+            if config is not None:
+                self._config = list(config)
             for i in [i for i in self._entries if i <= index]:
                 del self._entries[i]
 

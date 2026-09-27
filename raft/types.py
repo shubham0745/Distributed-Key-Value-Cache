@@ -4,6 +4,7 @@ raft/types.py
 Core data types for the Raft consensus algorithm.
 Every concept here maps directly to the Raft paper.
 """
+import json
 import time
 from enum import Enum
 from dataclasses import dataclass, field
@@ -14,6 +15,10 @@ from typing import Optional
 # but committing it also commits every entry left over from older terms
 # (a leader may only count replicas for entries of its OWN term — §5.4.2).
 NOOP = "NOOP"
+
+# "CONFIG <json list of members>" — a new cluster membership (Week 7).
+# Takes effect as soon as it is in a node's log, committed or not.
+CONFIG = "CONFIG"
 
 
 class RaftState(Enum):
@@ -49,15 +54,47 @@ class LogEntry:
     applied to the actual cache.
 
     Fields:
-        term     — which election term this entry was created in
-        index    — position in the log (1-based)
-        command  — the actual operation, e.g. "SET name shubham"
-        username — which user's cache this affects
+        term       — which election term this entry was created in
+        index      — position in the log (1-based)
+        command    — the actual operation, e.g. "SET name shubham"
+        username   — which user's cache this affects
+        request_id — "client_id:seq" of the request that produced it.
+                     A client that retries after a lost reply sends the
+                     same id, and the state machine applies it only once.
     """
     term:     int
     index:    int
-    command:  str   # "SIGNUP <hash>", "SET key value", "DELETE key" or NOOP
+    command:  str   # "SIGNUP <hash>", "SET key value", "DELETE key", NOOP, CONFIG ...
     username: str   # which user's cache to apply to
+    request_id: str = ""
+
+
+@dataclass(frozen=True)
+class Member:
+    """One voting member of the cluster and where to reach it."""
+    node_id:        str
+    raft_address:   str          # "host:port" other nodes send RPCs to
+    client_address: str = ""     # "host:port" clients connect to
+
+    def to_dict(self) -> dict:
+        return {"id": self.node_id, "raft": self.raft_address, "client": self.client_address}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Member":
+        return cls(d["id"], d["raft"], d.get("client", ""))
+
+
+def config_command(members) -> str:
+    """The log command that makes `members` the new cluster membership."""
+    ordered = sorted(members, key=lambda m: m.node_id)
+    return f"{CONFIG} " + json.dumps([m.to_dict() for m in ordered])
+
+
+def parse_config(command: str) -> Optional[list]:
+    """Members from a CONFIG command, or None for any other command."""
+    if not command.startswith(CONFIG + " "):
+        return None
+    return [Member.from_dict(d) for d in json.loads(command[len(CONFIG) + 1:])]
 
 
 @dataclass
@@ -71,15 +108,17 @@ class RaftNode:
         log           — list of LogEntry (only entries AFTER the snapshot)
 
     Snapshot (log compaction):
-        snapshot_index — last log index folded into the snapshot
-        snapshot_term  — term of that entry
+        snapshot_index  — last log index folded into the snapshot
+        snapshot_term   — term of that entry
+        snapshot_config — cluster membership as of snapshot_index
+                          (at index 0: the bootstrap membership)
         Entries 1..snapshot_index are no longer in `log`; their effect
         already lives in the state machine (the cache / MySQL).
 
     Volatile state (rebuilt from log on restart):
         commit_index  — highest log index known to be committed
         last_applied  — highest log index applied to state machine
-        leader_id     — who we believe the leader is (for client redirects)
+        leader_id     — who we believe the leader is
 
     Leader-only volatile state (reset after each election):
         next_index    — for each follower, next log index to send
@@ -99,7 +138,7 @@ class RaftNode:
     commit_index: int = 0
     last_applied: int = 0
 
-    # Leader-only (keyed by peer address)
+    # Leader-only (keyed by peer id)
     next_index:   dict = field(default_factory=dict)
     match_index:  dict = field(default_factory=dict)
 
@@ -110,8 +149,9 @@ class RaftNode:
     leader_id: Optional[str] = None
 
     # Snapshot boundary
-    snapshot_index: int = 0
-    snapshot_term:  int = 0
+    snapshot_index:  int = 0
+    snapshot_term:   int = 0
+    snapshot_config: Optional[list] = None
 
     def last_log_index(self) -> int:
         """Index of the last entry in our log (0 if empty)."""
@@ -149,19 +189,39 @@ class RaftNode:
         """Delete the entry at `index` and everything after it."""
         del self.log[index - self.snapshot_index - 1:]
 
-    def compact_through(self, index: int, term: int) -> None:
+    def latest_config(self) -> tuple[int, Optional[list]]:
+        """(index, members) of the newest membership in the log, else the snapshot's."""
+        for entry in reversed(self.log):
+            members = parse_config(entry.command)
+            if members is not None:
+                return entry.index, members
+        return self.snapshot_index, self.snapshot_config
+
+    def config_at(self, index: int) -> Optional[list]:
+        """The membership in effect at `index`."""
+        for entry in reversed(self.log):
+            if entry.index <= index:
+                members = parse_config(entry.command)
+                if members is not None:
+                    return members
+        return self.snapshot_config
+
+    def compact_through(self, index: int, term: int, config: Optional[list] = None) -> None:
         """
         Fold entries 1..index into the snapshot.
         If our entry at `index` has the same term we keep the entries
         after it; otherwise our log disagrees with the snapshot and is
         thrown away entirely.
         """
+        if config is None:
+            config = self.config_at(index)
         if self.term_at(index) == term:
             self.log = self.log[index - self.snapshot_index:]
         else:
             self.log = []
-        self.snapshot_index = index
-        self.snapshot_term  = term
+        self.snapshot_index  = index
+        self.snapshot_term   = term
+        self.snapshot_config = config
 
     def is_leader(self) -> bool:
         return self.state == RaftState.LEADER

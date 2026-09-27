@@ -316,11 +316,12 @@ class TestLeaderElection:
 # WEEK 5 — LOG REPLICATION
 # ══════════════════════════════════════════════
 
+import json
 from dataclasses import asdict
 
-from raft import MemoryRaftStorage, NotLeaderError, ProposalError
+from raft import MemoryRaftStorage, NotLeaderError, ProposalError, Member
 
-FAST = {"heartbeat_interval": 0.05, "election_timeout": (0.3, 0.6)}
+FAST = {"heartbeat_interval": 0.05, "election_timeout": (0.4, 0.8)}
 
 
 def entry(index: int, term: int = 1, command: str = None) -> LogEntry:
@@ -356,13 +357,13 @@ class KVMachine:
             if verb == "DELETE":
                 return self.data.pop(rest, None) is not None
 
-    def snapshot(self):
+    def snapshot(self, out):
         with self._lock:
-            return dict(self.data)
+            json.dump(self.data, out)
 
-    def restore(self, data):
+    def restore(self, source):
         with self._lock:
-            self.data = dict(data or {})
+            self.data = json.load(source)
 
 
 class RaftCluster:
@@ -371,14 +372,15 @@ class RaftCluster:
     def __init__(self, size: int = 3, **options):
         self.ports = [get_free_port() for _ in range(size)]
         self.options = {**FAST, **options}
+        self.members = [Member(f"node{i + 1}", f"127.0.0.1:{p}") for i, p in enumerate(self.ports)]
         self.storages = [MemoryRaftStorage() for _ in range(size)]
         self.machines = [KVMachine() for _ in range(size)]
         self.engines = [self._make(i) for i in range(size)]
 
-    def _make(self, i: int) -> RaftEngine:
-        peers = [f"127.0.0.1:{p}" for j, p in enumerate(self.ports) if j != i]
+    def _make(self, i: int, join: bool = False) -> RaftEngine:
         m = self.machines[i]
-        return RaftEngine(f"node{i + 1}", "127.0.0.1", self.ports[i], peers,
+        return RaftEngine(f"node{i + 1}", "127.0.0.1", self.ports[i],
+                          members=self.members, join=join,
                           apply_fn=m.apply, snapshot_fn=m.snapshot, restore_fn=m.restore,
                           storage=self.storages[i], **self.options)
 
@@ -386,12 +388,36 @@ class RaftCluster:
         for i in indexes or range(len(self.engines)):
             self.engines[i].start()
 
+    def add_joining(self) -> int:
+        """A new engine that starts with no membership (like main.py --join)."""
+        i = len(self.engines)
+        self.ports.append(get_free_port())
+        self.storages.append(MemoryRaftStorage())
+        self.machines.append(KVMachine())
+        self.engines.append(self._make(i, join=True))
+        self.engines[i].start()
+        return i
+
+    def member(self, i: int) -> Member:
+        return Member(f"node{i + 1}", f"127.0.0.1:{self.ports[i]}")
+
     def restart(self, i: int):
         """Crash + restart: same storage (term/vote/log), empty state machine."""
         self.engines[i].stop()
         self.machines[i] = KVMachine()
         self.engines[i] = self._make(i)
         self.engines[i].start()
+
+    def isolate(self, i: int):
+        """Network partition: node i and everyone else can't reach each other."""
+        for j, engine in enumerate(self.engines):
+            if j != i:
+                engine._blocked.add(f"127.0.0.1:{self.ports[i]}")
+                self.engines[i]._blocked.add(f"127.0.0.1:{self.ports[j]}")
+
+    def heal(self):
+        for engine in self.engines:
+            engine._blocked.clear()
 
     def stop_all(self):
         for e in self.engines:
@@ -632,7 +658,8 @@ class TestLogReplication:
         for e in c.engines:
             if e is not leader:
                 e.stop()
-        with pytest.raises(ProposalError):
+        # Either it times out, or check-quorum already made it step down
+        with pytest.raises((ProposalError, NotLeaderError)):
             leader.propose("SET lonely 1", "u", timeout=0.5)
         assert "lonely" not in c.machine_of(leader).data
 
