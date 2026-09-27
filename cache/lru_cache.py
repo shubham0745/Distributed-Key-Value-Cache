@@ -92,6 +92,14 @@ class LRUCache(ICache):
         with self._lock:
             return len(self._data)
 
+    def items(self) -> list[tuple[str, str]]:
+        """
+        Copy of every (key, value) pair, least recently used FIRST.
+        Re-inserting them in this order rebuilds the same LRU order.
+        """
+        with self._lock:
+            return list(self._data.items())
+
     def capacity(self) -> int:
         """Maximum number of keys allowed."""
         return self._capacity

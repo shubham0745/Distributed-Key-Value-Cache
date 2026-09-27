@@ -287,6 +287,116 @@ class TestServerRestoresFromDB:
 
 
 # ──────────────────────────────────────────────
+# REAL DATABASE (a throwaway SQLite file — see conftest.py)
+# ──────────────────────────────────────────────
+
+class TestRealDatabase:
+    """
+    No ORM mocks here: rows really get written and read back, so these
+    cover restarts, LRU eviction + DB fallback, and the startup checks.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _db(self, clean_db):
+        with MOCK_MAKE, MOCK_CHECK:
+            self.servers = []
+            yield
+            for srv in self.servers:
+                srv.stop()
+
+    def boot(self, capacity: int = 1000):
+        port = get_free_port()
+        srv = make_server(port, use_db=True)
+        srv.state_machine.capacity = capacity
+        start_server(srv)
+        self.servers.append(srv)
+        return srv, port
+
+    def login(self, port, username, password):
+        sock = connect_client(port)
+        sr(sock, "LOGIN")
+        sr(sock, username)
+        assert sr(sock, password) == f"READY:{username}"
+        return sock
+
+    def test_data_survives_restart(self):
+        srv, port = self.boot()
+        sock = signup_and_auth(port, "alice", "pass1234")
+        assert sr(sock, "SET city delhi") == "OK"
+        sock.close()
+        srv.stop()
+
+        _, port2 = self.boot()
+        sock = self.login(port2, "alice", "pass1234")
+        assert sr(sock, "GET city") == "delhi"
+        sock.close()
+
+    def test_evicted_key_is_read_back_from_db(self):
+        _, port = self.boot(capacity=2)
+        sock = signup_and_auth(port, "carol", "pass1234")
+        for key in "abc":
+            sr(sock, f"SET {key} value_{key}")       # 'a' falls out of RAM
+        assert sr(sock, "GET a") == "value_a"
+        assert sr(sock, "HAS a") == "1"
+        sock.close()
+
+    def test_deleting_an_evicted_key_removes_it_from_db(self):
+        srv, port = self.boot(capacity=2)
+        sock = signup_and_auth(port, "erin", "pass1234")
+        for key in "abc":
+            sr(sock, f"SET {key} value_{key}")
+        assert sr(sock, "DELETE a") == "OK"
+        sock.close()
+        srv.stop()
+
+        _, port2 = self.boot()
+        sock = self.login(port2, "erin", "pass1234")
+        assert sr(sock, "GET a") == "NULL"            # didn't come back to life
+        sock.close()
+
+    def test_user_added_to_db_after_startup_can_log_in(self):
+        _, port = self.boot()
+        from apps.users.db_service import save_user, save_entry
+        save_user("bob", "hashed_pw1234")
+        save_entry("bob", "color", "blue")
+
+        sock = self.login(port, "bob", "pw1234")
+        assert sr(sock, "GET color") == "blue"
+        assert sr(sock, "SET size large") == "OK"
+        sock.close()
+
+    def test_startup_fails_loudly_when_db_unreadable(self):
+        from server.state_machine import StateLoadError
+        srv = make_server(get_free_port(), use_db=True)
+        with patch("apps.users.db_service.load_all_users",
+                   side_effect=RuntimeError("MySQL is down")):
+            with pytest.raises(StateLoadError):
+                srv.start()
+
+    def test_snapshot_round_trip(self):
+        from raft import LogEntry
+        from server.state_machine import CacheStateMachine
+        sm = CacheStateMachine(use_db=True)
+        sm.apply(LogEntry(1, 1, "SIGNUP hashed_x", "zoe"))
+        sm.apply(LogEntry(1, 2, "SET lang python", "zoe"))
+        snapshot = sm.snapshot()
+
+        from apps.users.db_service import replace_all
+        replace_all([])                              # wipe
+        fresh = CacheStateMachine(use_db=True)
+        fresh.restore(snapshot)
+        assert fresh.get("zoe", "lang") == "python"
+        assert fresh.user_exists("zoe")
+
+    def test_cluster_node_keeps_raft_state_in_db(self):
+        from server.tcp_server import TCPServer
+        from apps.cluster.raft_storage import DjangoRaftStorage
+        srv = TCPServer(port=get_free_port(), use_db=True, node_id="node1",
+                        raft_port=get_free_port(), peers=["127.0.0.1:1"])
+        assert isinstance(srv.raft._storage, DjangoRaftStorage)
+
+
+# ──────────────────────────────────────────────
 # REGRESSION: ALL WEEK 2 TESTS STILL PASS
 # ──────────────────────────────────────────────
 

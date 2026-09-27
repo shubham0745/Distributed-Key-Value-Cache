@@ -9,13 +9,15 @@ class Cache(ICache):
     Thread-safe in-memory key-value cache using a plain dict.
     This directly mirrors cache_impl.go from the original project.
 
-    Why RLock (Reentrant Lock)?
-    - Multiple readers can READ simultaneously (get, has, size)
-    - Only ONE writer can WRITE at a time (set, delete, clear)
-    - RLock.acquire_read() allows concurrent reads (better performance)
-    - RLock.acquire_write() blocks until all readers finish
+    Why a lock at all?
+    Every client connection runs in its own thread, so two threads could
+    touch the dict at the same moment. threading.RLock lets exactly ONE
+    thread inside at a time — readers included. "Reentrant" means the
+    same thread may acquire it again without deadlocking itself.
 
-    In the original Go code: sync.RWMutex does exactly the same thing.
+    The original Go code used sync.RWMutex, which also lets many READERS
+    in at once. Python's standard library has no read-write lock; with the
+    GIL a plain lock costs very little here, so we keep it simple.
     """
 
     def __init__(self):
@@ -71,6 +73,11 @@ class Cache(ICache):
         """Return number of keys in cache."""
         with self._lock:
             return len(self._data)
+
+    def items(self) -> list[tuple[str, str]]:
+        """Return a copy of every (key, value) pair."""
+        with self._lock:
+            return list(self._data.items())
 
     def keys(self) -> list[str]:
         """Return all keys. Useful for debugging."""

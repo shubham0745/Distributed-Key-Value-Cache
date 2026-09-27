@@ -1,0 +1,7 @@
+{
+  "nodes": [
+    {"id": "node1", "host": "127.0.0.1", "client_port": 8001, "raft_port": 9001, "db_name": "distributed_cache_node1"},
+    {"id": "node2", "host": "127.0.0.1", "client_port": 8002, "raft_port": 9002, "db_name": "distributed_cache_node2"},
+    {"id": "node3", "host": "127.0.0.1", "client_port": 8003, "raft_port": 9003, "db_name": "distributed_cache_node3"}
+  ]
+}

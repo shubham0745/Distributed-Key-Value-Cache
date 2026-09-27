@@ -208,6 +208,73 @@ class TestTCPServerCommands:
         assert "error" in sr(session, "SET onlykey").lower()
 
 
+class TestProtocolRobustness:
+    """Malformed input must produce an ERROR, never a dropped session."""
+
+    @pytest.fixture()
+    def session(self):
+        port = get_free_port()
+        with MOCK_MAKE, MOCK_CHECK:
+            server = make_server(port)
+            start_server(server)
+            sock = signup_and_auth(port, "robust", "pass1234")
+            yield sock
+            sock.close()
+            server.stop()
+
+    def test_extra_spaces_between_parts(self, session):
+        assert sr(session, "SET  city   gurugram") == "OK"
+        assert sr(session, "GET city") == "gurugram"
+
+    def test_value_keeps_its_inner_spaces(self, session):
+        assert sr(session, "SET greeting hello  world") == "OK"
+        assert sr(session, "GET greeting") == "hello  world"
+
+    def test_bad_command_does_not_end_session(self, session):
+        assert "error" in sr(session, "SET").lower()
+        assert "error" in sr(session, "GET").lower()
+        assert sr(session, "SET still alive") == "OK"
+
+    def test_key_too_long_is_rejected(self, session):
+        assert "error" in sr(session, f"SET {'k' * 600} v").lower()
+
+    def test_info_reports_leader(self, session):
+        assert "role=leader" in sr(session, "INFO")
+
+
+class TestSignupRules:
+
+    @pytest.fixture()
+    def port(self):
+        port = get_free_port()
+        with MOCK_MAKE, MOCK_CHECK:
+            server = make_server(port)
+            start_server(server)
+            yield port
+            server.stop()
+
+    def test_username_with_spaces_rejected(self, port):
+        sock = connect_client(port)
+        sr(sock, "SIGNUP")
+        assert "error" in sr(sock, "two words").lower()
+        sock.close()
+
+    def test_concurrent_signup_same_name_only_first_wins(self, port):
+        """Both pass the 'is it taken?' check; Raft log order decides."""
+        s1, s2 = connect_client(port), connect_client(port)
+        sr(s1, "SIGNUP"); sr(s2, "SIGNUP")
+        sr(s1, "dave"); sr(s2, "dave")
+        first = sr(s1, "first_pw")
+        second = sr(s2, "second_pw")
+        assert first == "READY:dave"
+        assert "taken" in second.lower()
+        s3 = connect_client(port)
+        sr(s3, "LOGIN"); sr(s3, "dave")
+        assert sr(s3, "first_pw") == "READY:dave"
+        for s in (s1, s2, s3):
+            s.close()
+
+
 class TestUserIsolation:
 
     def test_two_users_cannot_see_each_others_data(self):

@@ -38,3 +38,8 @@ class ICache(ABC):
     def size(self) -> int:
         """Return number of keys currently in cache."""
         pass
+
+    @abstractmethod
+    def items(self) -> list[tuple[str, str]]:
+        """Return a copy of every (key, value) pair. Used for Raft snapshots."""
+        pass

@@ -1,3 +1,5 @@
+import threading
+
 from cache import CacheFactory
 from cache.cache_interface import ICache
 
@@ -5,29 +7,37 @@ from cache.cache_interface import ICache
 class Store:
     """
     Per-user store. Every user who logs in gets their OWN isolated Store.
-    
+
     This mirrors store_impl.go from the original project.
-    
+
     WHY PER-USER ISOLATION?
     Without this, user A could do GET on user B's keys.
     With namespacing: shubham's "name" key and rahul's "name" key
     are completely separate — they never collide.
-    
+
     Structure:
         server.stores = {
             "shubham": Store(username="shubham", cache=LRUCache),
             "rahul":   Store(username="rahul",   cache=LRUCache),
         }
-    
+
     The password is stored HERE (hashed) so the server can verify
     login attempts without hitting MySQL every single time.
-    In Week 3 we'll add MySQL as the persistent backup.
+    MySQL (Week 3) is the persistent copy behind this RAM cache.
     """
 
     def __init__(self, username: str, password_hash: str, capacity: int = 1000):
         self.username = username
         self._password_hash = password_hash  # Never stored as plain text
         self.cache: ICache = CacheFactory.create("lru", capacity=capacity)
+        # Serialises "RAM miss → read MySQL → put it back in RAM" against
+        # Raft applying a write to the same user at the same moment.
+        # Without it a slow reader could put an OLD value back into RAM.
+        self.lock = threading.RLock()
+
+    @property
+    def password_hash(self) -> str:
+        return self._password_hash
 
     def verify_password(self, plain_password: str) -> bool:
         """
