@@ -140,6 +140,22 @@ class TestReadIndex:
         with pytest.raises((NotLeaderError, ProposalError)):
             leader.read_index(timeout=0.5)
 
+    def test_coarse_clock_cannot_fake_a_confirmation(self, monkeypatch):
+        # Windows before Python 3.13: time.monotonic() ticks every ~15.6 ms, so
+        # a heartbeat sent just before the read can carry the read's own time.
+        real = time.monotonic
+        monkeypatch.setattr(time, "monotonic", lambda: real() // 0.015625 * 0.015625)
+        for _ in range(5):
+            c = RaftCluster()
+            try:
+                c.start()
+                leader = c.leader()
+                c.isolate(c.engines.index(leader))
+                with pytest.raises((NotLeaderError, ProposalError)):
+                    leader.read_index(timeout=0.5)
+            finally:
+                c.stop_all()
+
 
 class TestForwarding:
 

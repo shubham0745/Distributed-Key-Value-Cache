@@ -23,7 +23,7 @@ A Redis-style key-value cache written from scratch in Python. Several nodes stay
 - **Exactly-once writes:** every request carries a client id and sequence number, so a retried write is applied only once.
 - **Security:** TLS for clients, **mutual TLS** between nodes, and a certificate generator.
 - **Tooling:** a CLI client with failover and retries, a cluster launcher, and an import tool for existing databases.
-- **Tests:** 259 covering unit behaviour, real multi-node clusters over TCP, network partitions, crash and restart, membership changes, TLS and snapshots. CI runs them on Linux and Windows.
+- **Tests:** 260 covering unit behaviour, real multi-node clusters over TCP, network partitions, crash and restart, membership changes, TLS and snapshots. CI runs them on Linux and Windows.
 
 ## Architecture
 

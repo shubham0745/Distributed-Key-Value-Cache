@@ -247,7 +247,8 @@ class RaftEngine:
         self._learners: dict[str, Member] = {}    # leader: catching up, not voting yet
         self._term_start_index = 0                # leader: index of our no-op
         self._last_contact: dict[str, float] = {}     # leader: peer → last reply time
-        self._last_ack_sent: dict[str, float] = {}    # leader: peer → send time of newest answered request
+        self._send_seq = 0                            # leader: numbers every request we send
+        self._last_ack_seq: dict[str, int] = {}       # leader: peer → number of newest answered request
         self._last_leader_contact = 0.0           # follower: last time a leader talked to us
         self._leader_address = ""                 # follower: leader's Raft address
         self._transferring = False                # leader: handing over, refuse writes
@@ -744,7 +745,7 @@ class RaftEngine:
         next_idx = n.last_log_index() + 1
         now = time.monotonic()
         n.next_index, n.match_index = {}, {}
-        self._last_contact, self._last_ack_sent = {}, {}
+        self._last_contact, self._last_ack_seq = {}, {}
         for peer_id in self._targets():
             n.next_index[peer_id]  = next_idx
             n.match_index[peer_id] = 0
@@ -948,7 +949,7 @@ class RaftEngine:
     def _send_entries_to(self, peer: Member, term: int,
                          request: AppendEntriesRequest) -> bool:
         """Send one AppendEntries and process the reply. False if unreachable."""
-        sent_at = time.monotonic()
+        seq = self._next_send_seq()
         response = self._send_append_entries(peer.raft_address, request)
         if response is None:
             return False
@@ -960,7 +961,7 @@ class RaftEngine:
                 return True
             if n.state != RaftState.LEADER or n.current_term != term:
                 return True
-            self._note_contact(peer.node_id, sent_at)
+            self._note_contact(peer.node_id, seq)
 
             if response.success:
                 match = max(request.prev_log_index + len(request.entries),
@@ -975,10 +976,21 @@ class RaftEngine:
             self._cond.notify_all()
         return True
 
-    def _note_contact(self, peer_id: str, sent_at: float):
-        """A peer answered a request of our term that we sent at `sent_at`. (lock held)"""
+    def _next_send_seq(self) -> int:
+        """
+        Number a request before sending it. read_index() compares these
+        numbers instead of send times: on Windows before Python 3.13 the
+        monotonic clock ticks every ~15 ms, so a request sent just before
+        a read could look as if it was sent after.
+        """
+        with self._state_lock:
+            self._send_seq += 1
+            return self._send_seq
+
+    def _note_contact(self, peer_id: str, seq: int):
+        """A peer answered request number `seq` of our term. (lock held)"""
         self._last_contact[peer_id] = time.monotonic()
-        self._last_ack_sent[peer_id] = max(self._last_ack_sent.get(peer_id, 0.0), sent_at)
+        self._last_ack_seq[peer_id] = max(self._last_ack_seq.get(peer_id, 0), seq)
         self._cond.notify_all()      # read_index() may be waiting for this
 
     def _send_snapshot_to(self, peer: Member, term: int) -> bool:
@@ -998,7 +1010,7 @@ class RaftEngine:
             size = os.path.getsize(path)
             logger.info(f"[{self.node_id}] Sending snapshot (up to entry {index}, "
                         f"{size} bytes) to {peer.node_id}")
-            sent_at = time.monotonic()
+            seq = self._next_send_seq()
             with open(path, "rb") as f:
                 offset = 0
                 while True:
@@ -1018,7 +1030,7 @@ class RaftEngine:
                             return True
                         if self._node.state != RaftState.LEADER or self._node.current_term != term:
                             return True
-                        self._note_contact(peer.node_id, sent_at)
+                        self._note_contact(peer.node_id, seq)
                     if not response.success:
                         return False            # out of order — start over next round
                     offset += len(chunk)
@@ -1095,8 +1107,8 @@ class RaftEngine:
 
     def _confirm_read_index(self, deadline: float) -> int:
         """Leader side of ReadIndex (see the module docstring)."""
-        start = time.monotonic()
         with self._cond:
+            start = self._send_seq          # only requests numbered after this count
             n = self._node
             self._require_leader()
             term = n.current_term
@@ -1109,7 +1121,7 @@ class RaftEngine:
                 event.set()
             while True:
                 acks = sum(1 for m in self._members
-                           if m == self.node_id or self._last_ack_sent.get(m, -1e9) >= start)
+                           if m == self.node_id or self._last_ack_seq.get(m, 0) > start)
                 if acks >= self._majority():
                     return read_index
                 self._wait_leader(term, deadline, "timed out confirming leadership")
