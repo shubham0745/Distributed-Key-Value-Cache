@@ -8,6 +8,8 @@ import time
 import pytest
 from unittest.mock import patch
 
+from tests.ports import get_free_port
+
 import os
 import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
@@ -16,11 +18,6 @@ try:
 except Exception:
     pass
 
-
-def get_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 def make_server(port: int):
     from server.tcp_server import TCPServer

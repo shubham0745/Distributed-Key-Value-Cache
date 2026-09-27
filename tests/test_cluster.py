@@ -19,15 +19,10 @@ from client.cli import (CacheClient, AuthError, ClientError, main as cli_main, p
                         authenticate, ask_mode, ask_password)
 from raft import Member
 from server.tcp_server import TCPServer
+from tests.ports import get_free_port
 
 FAST = {"heartbeat_interval": 0.05, "election_timeout": (0.4, 0.8)}
 ADMIN_TOKEN = "test-admin-token"
-
-
-def get_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def wait_until(condition, timeout: float = 5.0) -> bool:
