@@ -7,3 +7,5 @@ __pycache__/
 .idea
 .pytest_cache/
 *.sqlite3
+certs/
+*.pem

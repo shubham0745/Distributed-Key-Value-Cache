@@ -1,6 +1,7 @@
 # Runtime
 Django>=5.2,<5.3        # ORM (MySQL persistence) + password hashing
 mysqlclient>=2.2        # MySQL driver; not needed with --no-db or DB_ENGINE=sqlite
+cryptography>=42        # scripts/gen_certs.py (TLS certificates)
 
 # Tests
 pytest>=8.0
