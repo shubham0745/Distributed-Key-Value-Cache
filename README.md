@@ -1,55 +1,64 @@
 # Distributed Key-Value Cache
 
-A Redis-style key-value cache written from scratch in Python. Several nodes stay in sync with the **Raft** consensus algorithm, and every node keeps a durable copy in **MySQL**. Leader election, log replication, persistence and snapshots are all implemented here, with no consensus library.
+![tests](https://github.com/shubham0745/Distributed-Key-Value-Cache/actions/workflows/tests.yml/badge.svg)
+
+A Redis-style key-value cache written from scratch in Python. Several nodes stay in sync with the **Raft** consensus algorithm, and every node keeps a durable copy in **MySQL**. There is no consensus library: leader election, log replication, persistence, snapshots, membership changes and linearizable reads are all implemented here.
 
 **Author:** Shubham Kumar
 
 ## Features
 
-- **Per-user caches.** Each user has an isolated, thread-safe LRU cache (1000 keys per user by default).
-- **Accounts.** `SIGNUP`/`LOGIN` with PBKDF2-hashed passwords (Django's hashers).
-- **Write-through persistence.** Every write goes to MySQL before it reaches RAM. A key that the LRU evicts is read back from MySQL.
-- **Raft cluster:**
-  - leader election with randomized timeouts
-  - log replication with the consistency check and conflict back-off
-  - commitment by majority
-  - persisted term, vote and log
-  - log compaction, with `InstallSnapshot` for nodes that fall far behind
-- **Leader redirects.** Followers answer `ERROR: NOT_LEADER <host:port>`. The bundled CLI client follows the redirect, logs in again and fails over when a node dies.
-- **176 tests.** They cover unit behaviour, real multi-node clusters over TCP, crash and restart, and snapshot install.
+- **Cache**
+  - Isolated, thread-safe LRU cache per user, backed by MySQL: evicted keys are read back, never lost.
+  - `SETEX` / `EXPIRE` / `TTL` / `PERSIST` / `KEYS [pattern]`, with expiry that is identical on every node.
+- **Accounts:** `SIGNUP` / `LOGIN` with PBKDF2-hashed passwords, plus a token-protected admin session.
+- **Raft**
+  - Leader election with **Pre-Vote**, leader stickiness and **CheckQuorum**: a node that loses contact can't disrupt the cluster when it returns, and a cut-off leader steps down.
+  - Log replication with the consistency check and fast conflict back-off.
+  - Term, vote, log and membership are persisted.
+  - Log compaction, with **snapshots streamed in chunks** to followers that fall behind.
+  - **Membership changes at runtime**: add or remove nodes one at a time; new nodes catch up as learners first.
+  - **Leadership transfer**: a gracefully stopped leader hands over in milliseconds.
+- **Consistency:** any node serves any command. Writes are forwarded to the leader, and reads are linearizable via **ReadIndex**. `--stale-reads` trades that for speed.
+- **Exactly-once writes:** every request carries a client id and sequence number, so a retried write is applied only once.
+- **Security:** TLS for clients, **mutual TLS** between nodes, and a certificate generator.
+- **Tooling:** a CLI client with failover and retries, a cluster launcher, and an import tool for existing databases.
+- **Tests:** 259 covering unit behaviour, real multi-node clusters over TCP, network partitions, crash and restart, membership changes, TLS and snapshots. CI runs them on Linux and Windows.
 
 ## Architecture
 
 ```
-            client/cli.py  or  telnet
-                    │  one command per line
-                    ▼
-   ┌──────────────── node (main.py) ────────────────┐
-   │ server/tcp_server.py   auth + commands          │
-   │        │ writes                   │ reads       │
-   │        ▼                          ▼             │
-   │ raft/node.py  ──commit──▶  server/state_machine.py
-   │  (RaftEngine)   apply()     per-user LRUCache    │
-   │        │                          │ write-through│
-   │        │ raft_meta / raft_log     ▼              │
-   │        └──────────────▶  MySQL (this node's DB)  │
-   └────────┬────────────────────────────────────────┘
-            │ RequestVote / AppendEntries / InstallSnapshot (JSON over TCP)
-            ▼
-       other nodes (same layout, their own database)
+             client/cli.py  or  telnet  (TLS optional)
+                     │  one command per line
+                     ▼
+   ┌──────────────────── node (main.py) ─────────────────────┐
+   │ server/tcp_server.py   auth, commands, admin session     │
+   │     │ writes: submit()           │ reads: read_index()   │
+   │     ▼                            ▼                       │
+   │ raft/node.py (RaftEngine) ──commit──▶ server/state_machine.py
+   │   election · replication ·  apply()   per-user LRU + expiry
+   │   snapshots · membership ·            sessions (exactly-once)
+   │   ReadIndex · forwarding                │ write-through    │
+   │     │ raft_meta / raft_log              ▼                  │
+   │     └────────────────────────▶ MySQL (this node's own DB)  │
+   └──────┬───────────────────────────────────────────────────┘
+          │ RequestVote · AppendEntries · InstallSnapshot · ReadIndex
+          │ Forward · TimeoutNow      (JSON over TCP, mutual TLS optional)
+          ▼
+     other nodes: same layout, each with its own database
 ```
 
-**Write path (`SET`, `DELETE`, `SIGNUP`)**
-1. The leader appends the command to its Raft log.
-2. It replicates the entry to the followers.
-3. Once a majority stores the entry, it is **committed**.
+**Write path** (`SET`, `SETEX`, `DELETE`, `EXPIRE`, `PERSIST`, `SIGNUP`)
+1. Any node receives the command. A follower forwards it to the leader.
+2. The leader appends it to the Raft log and replicates it.
+3. Once a majority stores it, it is committed.
 4. Every node applies committed entries in log order: MySQL first, then RAM.
-5. The client gets `OK` only after the leader has applied the entry.
+5. The client gets its answer after the leader has applied the entry.
 
-**Read path (`GET`, `HAS`)**
-- The leader answers from RAM, falling back to MySQL on a cache miss.
-- Followers redirect reads to the leader, so you always see the latest acknowledged write.
-- Start nodes with `--stale-reads` to let followers answer locally instead. This is faster, but a follower may lag slightly.
+**Read path** (`GET`, `HAS`, `TTL`, `KEYS`)
+- The node first gets the leader's commit index. The leader confirms that index with a heartbeat round to a majority.
+- The node waits until it has applied up to that index, then answers from its own copy.
+- The answer always reflects every write acknowledged before the read started, whichever node you ask.
 
 ## Quick start
 
@@ -70,9 +79,9 @@ python client/cli.py               # in a second terminal
 
 ### 2. Single node with MySQL
 
-```bash
-set DB_PASSWORD=your_mysql_password      # export DB_PASSWORD=... on Linux/macOS
-python main.py --init-db                 # creates the database + tables
+```powershell
+$env:DB_PASSWORD = "your_mysql_password"   # export DB_PASSWORD=... on Linux/macOS
+python main.py --init-db                   # creates the database + tables
 python main.py
 ```
 
@@ -81,14 +90,14 @@ python main.py
 The nodes are defined in [`cluster.json`](cluster.json). Each node has a client port, a Raft port and its own database.
 
 ```bash
-python scripts/run_cluster.py --init-db  # once: create + migrate the 3 databases
+python scripts/run_cluster.py --init-db  # once: create + migrate each node's database
 python scripts/run_cluster.py            # starts node1..node3 (add --no-db to skip MySQL)
 python client/cli.py                     # knows every node from cluster.json
 ```
 
-To watch a failover, start each node in its own terminal (`python main.py --node node1`, and so on). Stop the leader with Ctrl+C and keep using the client. A new leader takes over within a few seconds, and no acknowledged write is lost.
+To watch a failover, start each node in its own terminal (`python main.py --node node1`, and so on). Kill the leader's terminal: another node takes over within an election timeout, and the client carries on. Stop it with **Ctrl+C** instead and it hands leadership over first, so the switch takes milliseconds.
 
-## Client session
+## Using the client
 
 ```text
 $ python client/cli.py
@@ -97,53 +106,117 @@ Username: shubham
 Password (hidden as you type):
 Logged in as shubham on 127.0.0.1:8001
 shubham@127.0.0.1:8001> SET city gurugram
-(now connected to 127.0.0.1:8003)
 OK
-shubham@127.0.0.1:8003> GET city
-gurugram
-shubham@127.0.0.1:8003> INFO
-node=node3 role=leader term=2 leader=node3 commit=4 applied=4 last_log=4 snapshot=0 peers=2
+shubham@127.0.0.1:8001> SETEX otp 60 4711
+OK
+shubham@127.0.0.1:8001> TTL otp
+60
+shubham@127.0.0.1:8001> KEYS
+2 city otp
+shubham@127.0.0.1:8001> MEMBERS
+leader=node2 node1=127.0.0.1:8001/127.0.0.1:9001 node2=127.0.0.1:8002/127.0.0.1:9002 node3=127.0.0.1:8003/127.0.0.1:9003
 ```
 
-One-shot commands work too:
+- **One-shot commands:** `python client/cli.py --user shubham --password secret GET city`
+- **Options:**
+  - `--nodes host:port,...` or `--cluster file`: which nodes to use. The default is every node in `cluster.json`.
+  - `--signup`: create the account instead of logging in.
+  - `--admin` (with `--admin-token`): open an admin session.
+  - `--ca ca.pem`: the CA to trust for TLS.
+- **From Python:** `CacheClient` in `client/cli.py` provides `set`, `setex`, `get`, `ttl`, `keys` and the rest.
+
+## Operating a cluster
+
+Admin commands need a token. Set it for the nodes and the client, or put `"admin_token"` in `cluster.json` (not in a public repo):
+
+```powershell
+$env:CACHE_ADMIN_TOKEN = "choose-a-long-secret"      # export CACHE_ADMIN_TOKEN=... on Linux/macOS
+```
+
+**Add a node while the cluster runs.**
+1. Add it to `cluster.json` with `"join": true`, and create its database with `python main.py --node node4 --init-db`.
+2. Start it with `python main.py --node node4`.
+
+It asks the cluster to add it, catches up as a learner, then becomes a voting member. From then on the membership lives in the Raft log, and `cluster.json` only describes the starting membership.
+
+**Remove a node.**
 
 ```bash
-python client/cli.py --user shubham --password secret GET city
+python client/cli.py --admin REMOVENODE node3
 ```
 
-`CacheClient` can also be imported from `client/cli.py` and used from Python code.
+Then stop that node's process. Removing the current leader works too: it steps down once the change is committed.
+
+**See the cluster.** `python client/cli.py --admin MEMBERS`, or `INFO` for one node's Raft status.
+
+**Encrypt everything.**
+
+```bash
+python scripts/gen_certs.py --enable     # CA + one certificate per node; adds "tls" to cluster.json
+```
+
+Then restart the nodes. Clients verify the nodes with `certs/ca.pem`, and `client/cli.py` picks it up from `cluster.json`. Nodes authenticate each other with their certificates, so a machine without one can't join the Raft traffic. For a single node, use `python main.py --tls-cert cert.pem --tls-key key.pem` and `client/cli.py --ca ca.pem`.
+
+**Bring existing data into a cluster.** Start the cluster, then:
+
+```bash
+python scripts/import_data.py --source-db distributed_cache      # or --source-sqlite old.sqlite3
+```
+
+Users keep their passwords, keys keep their expiry, and the import is safe to run twice.
 
 ## Protocol
 
-Plain text over TCP, one command per line. `telnet 127.0.0.1 8001` works.
+Plain text over TCP, one command per line, so `telnet 127.0.0.1 8001` works.
 
 | Command | Reply |
 |---|---|
 | `LOGIN` / `SIGNUP` | prompts for username and password, then `READY:<user>` |
-| `SET <key> <value>` | `OK` (the value may contain spaces) |
+| `ADMIN` | prompts for the admin token, then `READY:admin` |
+| `SET <key> <value>` | `OK` (the value may contain spaces; clears any expiry) |
+| `SETEX <key> <seconds> <value>` | `OK` |
 | `GET <key>` | the value, or `NULL` |
 | `HAS <key>` | `1` or `0` |
 | `DELETE <key>` | `OK`, or `NULL` if the key was missing |
-| `INFO` | Raft status of this node |
+| `EXPIRE <key> <seconds>` | `1`, or `0` if there is no such key |
+| `PERSIST <key>` | `1`, or `0` if the key had no expiry |
+| `TTL <key>` | seconds left; `-1` means no expiry, `-2` means no such key |
+| `KEYS [pattern]` | `<count> <key> <key> ...` (glob pattern, e.g. `user:*`) |
+| `INFO` | this node's Raft status |
+| `MEMBERS` | `leader=<id> <id>=<client addr>/<raft addr> ...` |
 | `QUIT` | `Bye!` |
+| **Admin session** | |
+| `ADDNODE <id> <client host:port> <raft host:port>` | `OK` |
+| `REMOVENODE <id>` | `OK` |
+| `IMPORTUSER <username> <password_hash>` | `OK` or `EXISTS` |
+| `IMPORTSET <username> <key> <expire_at_ms or 0> <value>` | `OK` or `EXPIRED` |
 
-In a cluster you may also get these replies:
-- `ERROR: NOT_LEADER <host:port>`: reconnect to that address.
-- `ERROR: NO_LEADER ...`: an election is in progress; retry shortly.
+**Exactly-once writes.** Prefix any command with `@<client_id>:<seq>` (the CLI does this). If a reply is lost and you resend the same prefix, the write isn't applied a second time; you get the original answer.
+
+**Other replies.**
+- `ERROR: NO_LEADER ...`: an election is running; retry shortly. The CLI does this for you.
+- `ERROR: NOT_LEADER <host:port>`: only `ADDNODE` and `REMOVENODE` must run on the leader. The CLI follows this redirect.
 
 ## Configuration
 
 | Setting | Where | Default |
 |---|---|---|
 | `--node <id>` | `main.py` | none (runs a single node) |
-| `--cluster <file>` | `main.py`, `scripts/run_cluster.py`, `client/cli.py` | `cluster.json` |
+| `--cluster <file>` | `main.py`, scripts, `client/cli.py` | `cluster.json` |
+| `--join` / `"join": true` | `main.py` / `cluster.json` | off |
 | `--no-db` | `main.py`, `scripts/run_cluster.py` | off (RAM only when set) |
 | `--stale-reads` | `main.py`, `scripts/run_cluster.py` | off |
+| `--host` | `main.py` (single node) | `127.0.0.1` |
 | `--port` / `CACHE_PORT` | `main.py` (single node) | `8001` |
+| `--tls-cert`, `--tls-key` | `main.py` (single node) | plaintext |
+| `CACHE_ADMIN_TOKEN` / `"admin_token"` | env / `cluster.json` | admin disabled |
+| `"tls": {"ca", "cert_dir"}` | `cluster.json` | plaintext |
 | `DB_ENGINE` | env | `mysql` (`sqlite` also works) |
 | `DB_NAME` | env / `cluster.json` `db_name` | `distributed_cache` |
 | `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | env | `root`, `12345`, `127.0.0.1`, `3306` |
 | `LOG_LEVEL` | env | `INFO` |
+
+**Upgrading from an earlier version:** stop the nodes, then run `python scripts/run_cluster.py --init-db` (cluster) or `python main.py --init-db` (single node) to add the new tables and columns. Existing data, users and Raft logs are kept.
 
 ## Running the tests
 
@@ -158,24 +231,30 @@ The tests never touch your MySQL. [`tests/conftest.py`](tests/conftest.py) point
 | `test_cache.py` | cache, LRU eviction, thread safety |
 | `test_server.py` | protocol, auth, malformed input, concurrent signup |
 | `test_persistence.py` | write-through, restart, eviction fallback, startup checks |
+| `test_state_machine.py` | deterministic expiry, exactly-once sessions, snapshots (RAM and database) |
 | `test_raft.py` | election, replication, conflicts, crash and restart, snapshots |
+| `test_raft_week7.py` | Pre-Vote, CheckQuorum, partitions, ReadIndex, forwarding, membership, leadership transfer, chunked snapshots |
 | `test_raft_storage.py` | persisted Raft state (RAM and database) |
-| `test_cluster.py` | 3 TCP servers: redirects, replication, failover, CLI |
+| `test_cluster.py` | real TCP clusters: any-node access, failover, hand-over, expiry, admin, CLI |
+| `test_tls.py` | TLS, mutual TLS, certificate generation |
+| `test_import.py` | importing an existing database |
+| `test_config.py` | `cluster.json` validation |
 
 ## Project layout
 
 ```
-main.py                 start a node (single or cluster)
-cluster.json            cluster membership
-cache/                  ICache interface, dict cache, LRU cache, factory
-store/store.py          per-user store (cache + password hash)
-server/tcp_server.py    TCP protocol, auth, routing writes into Raft
-server/state_machine.py what Raft replicates: users + their keys (RAM + MySQL)
-raft/                   RaftEngine, RPC messages, log types, storage interface
-apps/users/             Django models + db_service for users and entries
-apps/cluster/           Django models + storage for Raft term/vote/log
-client/cli.py           interactive and one-shot client with redirect/failover
-scripts/run_cluster.py  launch every node from one terminal
+main.py                   start a node (single or cluster, --join, --init-db)
+cluster.json              starting membership, ports, databases, TLS
+cache/                    ICache interface, dict cache, LRU cache, factory
+store/store.py            per-user store: cache, expiry times, password hash
+server/tcp_server.py      protocol, auth, admin session, expiry sweeper
+server/state_machine.py   what Raft replicates: users, keys, expiry, sessions
+raft/                     RaftEngine, RPC messages, log types, storage interface
+apps/users/               Django models + db_service for users, entries, sessions
+apps/cluster/             Django models + storage for Raft term/vote/log/membership
+config/                   settings, cluster.json loader, TLS contexts
+client/cli.py             client with failover, retries, redirects, TLS
+scripts/                  run_cluster.py, gen_certs.py, import_data.py
 ```
 
 ## How it was built
@@ -188,11 +267,14 @@ scripts/run_cluster.py  launch every node from one terminal
 | 4 | Raft leader election and heartbeats |
 | 5 | Raft log replication, leader redirects, CLI client |
 | 6 | Persisted Raft state, log compaction and snapshots |
+| 7 | Pre-Vote, CheckQuorum, ReadIndex, write forwarding, membership changes, leadership transfer, exactly-once writes, expiry, TLS, import, CI |
 
-## Limitations
+## Design trade-offs
 
-- **Fixed membership.** Adding or removing nodes means editing `cluster.json` and restarting.
-- **Leader reads assume a current leader.** They skip a quorum check, so a leader cut off by a network partition can briefly serve stale reads until it notices it has lost leadership.
-- **Retried writes may apply twice.** If a write times out during a leader change, the client retries it. `SET` and `DELETE` are safe to repeat, but a retried `SIGNUP` may report "taken".
-- **No encryption.** Node-to-node and client traffic is plain TCP, so run it on a trusted network.
-- **Cluster databases start empty.** Data from an existing single-node database is not imported into a new cluster.
+These are deliberate choices that come with any Raft-based system, not missing pieces.
+
+- **Needs a majority of nodes.** Writes and linearizable reads need a majority alive (2 of 3, 3 of 5). Without one the cluster refuses rather than risk inconsistent data, so it picks consistency over availability. `--stale-reads` keeps reads flowing from any live node.
+- **Reads cost a heartbeat round.** Confirming leadership with a majority takes about one heartbeat round per read. That is the price of linearizability, and `--stale-reads` skips it.
+- **Expiry follows the clocks.** Expiry times are stamped by the node that receives the command. A key can expire slightly earlier or later if node clocks differ. Keep clocks in sync with NTP, as with any distributed TTL.
+- **One membership change at a time.** Adding or removing one node per change keeps old and new majorities overlapping. That is what makes changes safe without a joint-consensus phase.
+- **Snapshots briefly pause applying.** While a snapshot is written for a lagging follower, the sending node pauses applying new entries. The dump streams through a file, so its size isn't limited by RAM.
